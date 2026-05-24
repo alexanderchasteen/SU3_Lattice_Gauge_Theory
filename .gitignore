@@ -16,3 +16,6 @@ eigen-5.0.0/
 __pycache__/
 *.pyc
 .vscode/
+*.png
+*.txt
+*.json

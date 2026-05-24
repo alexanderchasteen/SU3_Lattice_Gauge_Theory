@@ -56,3 +56,9 @@ plt.legend()
 plt.grid(True)
 plt.tight_layout()
 plt.show()
+
+# --- Save mean potential (no error bars) ---
+output = np.column_stack((r, V))
+np.savetxt("Polyakov_Potential_NoError.txt", output,
+           header="r    V(r)",
+           fmt="%.6f")
