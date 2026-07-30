@@ -39,8 +39,8 @@ SU3_array SU3_matrix_to_array(const SU3& matrix);
 SU3 SU3_array_to_matrix(const SU3_array& array);
 
 // Saving Data
-void save_lattice_config(const Link_array& array, const std::string& filename);
-
+bool save_all_lattice_configs(const std::array<Link_array, CONFIG>& links_at_coupling, const std::string& filename);
+bool load_all_lattice_configs(std::array<Link_array, CONFIG>& links_at_coupling, const std::string& filename);
 
 // Moving along the lattice
 void moveup(lattice_index& lattice_index_array, int link_direction);
@@ -49,7 +49,8 @@ void movedown(lattice_index& lattice_index_array, int link_direction);
 link_index combine_lattice_index_with_direction(const lattice_index& latice_index_array, int direction);
 // Computer Staple Sum 
 SU3 compute_staple_sum_at_link(const Link_array& arr, const link_index& link_index_array);
-
+SU3 compute_rectangle_staple_sum_at_link(const Link_array& arr, const link_index& link_index_array);
+SU3 compute_full_staple_sum_symanzik_at_link(const Link_array& arr, const link_index& link_index_array);
 
 
 SU2 R_block(const SU3& SU3_matrix);
@@ -69,12 +70,14 @@ SU2 T_block_to_2by2_unitary(const SU3& SU3_matrix);
 SU3 type_R_heatbath(const Link_array& arr, link_index link_index_array, double beta, SU3 U, SU3 A);
 SU3 type_S_heatbath(const Link_array& arr, link_index link_index_array, double beta, SU3 U, SU3 A);
 SU3 type_T_heatbath(const Link_array& arr, link_index link_index_array, double beta, SU3 U, SU3 A);
-double single_link_heatbath(Link_array& arr, const link_index& link_index_array, double beta);
-double heatbath_update(Link_array& arr, double beta);
-
+std::pair<double, double> single_link_heatbath(Link_array& arr, const link_index& link_index_array, double beta);
+std::pair<double, double> heatbath_update(Link_array& arr, double beta);
+double compute_action(Link_array arr, double beta);
 
 void check_unitarity(const Link_array& arr);
 
 complex poly_loop_at_spat_coord(const Link_array& arr, int x, int y, int z);
 complex compute_correlator(const Link_array& arr, spat_index m, spat_index n);
 complex correlator_over_fixed_distance(const Link_array& arr, int r);
+std::vector<complex> precompute_polyakov_grid(const Link_array& arr);
+complex correlator_over_fixed_distance_fast(const std::vector<complex>& P_grid, int r_squared);

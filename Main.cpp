@@ -1,220 +1,204 @@
-    #include <iostream>
-    #include <fstream>
-    #include <iomanip>
-    #include "Lattice.h"
-    #include "SU3_Sampling.h"
-    #include "rng.h"
-    #include "Parameters.h"
-    #include "statistics.h"
+#include <iostream>
+#include <fstream>
+#include <iomanip>
+#include <vector>
+#include <array>
+#include <utility>
+#include <omp.h>
+#include "Lattice.h"
+#include "SU3_Sampling.h"
+#include "rng.h"
+#include "Parameters.h"
+#include "statistics.h"
 
-int main(){
+int main() {
+    // --- Configuration Flags for Checkpointing ---
+    bool load_checkpoint = false; // Set to true to skip thermalization and load saved state
+    bool save_checkpoint = true;  // Set to true to save final state to disk at the end
+    const std::string checkpoint_filename = "final_lattice_configs.bin";
 
-    // Make the Raw Data File
+    // 1. Seed every thread's RNG once at startup
+    #pragma omp parallel
+    {
+        seed_thread_rng();
+    }
+
+    // --- 2. File Initialization ---
     std::string filename1 = "Thermalization_Data.csv";
     std::ofstream Thermfile(filename1);
-
-    if (!Thermfile) {
-        std::cerr << "Error creating file!\n";
-        return 1;
-    }
-
+    if (!Thermfile) { std::cerr << "Error creating file!\n"; return 1; }
     Thermfile << std::fixed << std::setprecision(6);
-
-    for (int i=0; i<CONFIG; i++){
-        if (i<CONFIG-1) Thermfile << coupling_constants[i] << ",";
-        if (i == CONFIG-1) Thermfile << coupling_constants[i];
+    for (int i = 0; i < CONFIG; i++) {
+        Thermfile << coupling_constants[i] << (i < CONFIG - 1 ? "," : "");
     }
-    Thermfile << "\n";
+    Thermfile << "\n"; Thermfile.flush();
 
     std::string filename2 = "RawMC_Data.csv";
     std::ofstream RawMCfile(filename2);
-
-    if (!RawMCfile) {
-        std::cerr << "Error creating file!\n";
-        return 1;
-    }
-
+    if (!RawMCfile) { std::cerr << "Error creating file!\n"; return 1; }
     RawMCfile << std::fixed << std::setprecision(6);
-
-    for (int i=0; i<CONFIG; i++){
-        if (i<CONFIG-1) RawMCfile << coupling_constants[i] << ",";
-        if (i == CONFIG-1) RawMCfile << coupling_constants[i];
+    for (int i = 0; i < CONFIG; i++) {
+        RawMCfile << coupling_constants[i] << (i < CONFIG - 1 ? "," : "");
     }
-    RawMCfile << "\n";
+    RawMCfile << "\n"; RawMCfile.flush();
 
-    
+    std::string filename_action = "Action_Data.csv";
+    std::ofstream Actionfile(filename_action);
+    if (!Actionfile) { std::cerr << "Error creating file!\n"; return 1; }
+    Actionfile << std::fixed << std::setprecision(6);
+    for (int i = 0; i < CONFIG; i++) {
+        Actionfile << coupling_constants[i] << (i < CONFIG - 1 ? "," : "");
+    }
+    Actionfile << "\n"; Actionfile.flush();
 
     std::string filename3 = "Poly_Corr_Real_Data.csv";
     std::ofstream poly(filename3);
-
-    if (!poly) {
-        std::cerr << "Error creating file!\n";
-        return 1;
-    }
-
+    if (!poly) { std::cerr << "Error creating file!\n"; return 1; }
     poly << std::fixed << std::setprecision(6);
-
-    for (int i=1; i<maxdistance+1; i++){
-        if (i<maxdistance) poly << i << ",";
-        if (i == maxdistance) poly << i;
+    poly << "sweep,coupling_idx,";
+    for (int i = 1; i <= maxdistance; i++) {
+        poly << "r_" << i << (i < maxdistance ? "," : "");
     }
-    poly << "\n";
+    poly << "\n"; poly.flush();
 
     std::string filename4 = "Poly_Corr_Imag_Data.csv";
     std::ofstream polycomplex(filename4);
-
-    if (!polycomplex) {
-        std::cerr << "Error creating file!\n";
-        return 1;
-    }
-
+    if (!polycomplex) { std::cerr << "Error creating file!\n"; return 1; }
     polycomplex << std::fixed << std::setprecision(6);
-
-
-    std::string filename5 = "Poly_Loop_Real_Data.csv";
-    std::ofstream polyloop(filename5);
-
-    if (!polyloop) {
-        std::cerr << "Error creating file!\n";
-        return 1;
+    polycomplex << "sweep,coupling_idx,";
+    for (int i = 1; i <= maxdistance; i++) {
+        polycomplex << "r_" << i << (i < maxdistance ? "," : "");
     }
+    polycomplex << "\n"; polycomplex.flush();
 
-    polyloop << std::fixed << std::setprecision(6);
 
-
-    
-    for (int i=0; i<CONFIG; i++){
-        if (i<CONFIG-1) polyloop << coupling_constants[i] << ",";
-        if (i == CONFIG-1) polyloop << coupling_constants[i];
-    }
-    polyloop << "\n";
-
-    std::string filename6 = "Poly_Loop_Complex_Data.csv";
-    std::ofstream polyloopcomplex(filename6);
-
-    if (!polyloopcomplex) {
-        std::cerr << "Error creating file!\n";
-        return 1;
-    }
-
-    polyloopcomplex << std::fixed << std::setprecision(6);
-
-     for (int i=0; i<CONFIG; i++){
-        if (i<CONFIG-1) polyloopcomplex << coupling_constants[i] << ",";
-        if (i == CONFIG-1) polyloopcomplex << coupling_constants[i];
-    }
-    polyloopcomplex << "\n";
-
-    for (int i=1; i<maxdistance+1; i++){
-        if (i<maxdistance) polycomplex << i << ",";
-        if (i == maxdistance) polycomplex << i;
-    }
-    polycomplex << "\n";
-
-    // Make the array of link arrays (that will be helpful for tempering)
+    // --- 3. Lattice Setup & Loading ---
     std::array<Link_array, CONFIG> links_at_coupling;
-    for (int i=0; i<CONFIG; i++){
-        links_at_coupling[i] = Link_array(array_size, 0.0); // initialize vector
-        cold_start_array(links_at_coupling[i]);            // cold start
+    for (int i = 0; i < CONFIG; i++) {
+        links_at_coupling[i] = Link_array(array_size, 0.0);
     }
-    std::cout << "Done Making" << std::endl;
 
+    bool successfully_loaded = false;
 
-    double action;
-
-    for (int j = 0; j < thermal_sweeps; j++) {
-        for (int i = 0; i < CONFIG; i++) {
-            action = heatbath_update(links_at_coupling[i], coupling_constants[i]);
-            if (i < CONFIG - 1) Thermfile << action << ",";
-            else Thermfile << action;
+    if (load_checkpoint) {
+        std::cout << "Attempting to load saved configurations from " << checkpoint_filename << "..." << std::endl;
+        successfully_loaded = load_all_lattice_configs(links_at_coupling, checkpoint_filename);
+        if (successfully_loaded) {
+            std::cout << "All " << CONFIG << " lattice configurations successfully restored." << std::endl;
+        } else {
+            std::cerr << "Failed to load checkpoint file. Falling back to cold start.\n";
         }
-        Thermfile << "\n";
-        if (j % 100 == 0) Thermfile.flush(); 
     }
 
-  
-    std::array<double, autocorrelation_sweeps> data;
-    std::array<int,CONFIG> integrated_autocorr_times;
-
-    for (int i = 0; i < CONFIG; i++){
-         for (int j=0; j<autocorrelation_sweeps; j++) {
-            action = heatbath_update(links_at_coupling[i], coupling_constants[i]);
-            data[j] = action;
-        }
-        int tau = tau_int(data);
-        std::cout<<tau<<std::endl;
-        integrated_autocorr_times[i] = tau;
-    }
-
-    for (int j = 0; j < measurment_sweeps; j++) {
-        complex PL; 
+    // Default to cold start if load_checkpoint is false or reading failed
+    if (!load_checkpoint || !successfully_loaded) {
+        std::cout << "Initializing lattices with cold start..." << std::endl;
         for (int i = 0; i < CONFIG; i++) {
-            for (int k =0; k <  integrated_autocorr_times[i];k++) action = heatbath_update(links_at_coupling[i], coupling_constants[i]);
-            if (i < CONFIG - 1) RawMCfile << action << ",";
-            else RawMCfile << action;
-              
-            // Now we just want to compute the polyakov loop at points m across the lattice and save them to the loop files to plt the scatter plt
-            complex z=0;
-            double x,y;
-            z = poly_loop_at_spat_coord(links_at_coupling[i],0,0,0);
-            // for (int i1 =0; i1<Spatial_Size;i1++)
-            //     for (int i2 =0; i2<Spatial_Size;i2++)
-            //         for (int i3 =0; i3<Spatial_Size;i3++){
-            //             z = poly_loop_at_spat_coord(links_at_coupling[i],0,0,0);
-            //         }
-              
-            x=z.real();
-            y=z.imag();     
-            if (i < CONFIG - 1){
-                polyloop << x << ",";
-                polyloopcomplex << y <<",";
-                } 
-            else{
-                polyloop <<x;
-                polyloopcomplex << y;
-                } 
+            cold_start_array(links_at_coupling[i]);
+        }
+    }
+
+
+    // --- 4. Thermalization Phase ---
+    if (load_checkpoint && successfully_loaded) {
+        std::cout << "Skipping thermalization phase (loaded existing state)." << std::endl;
+    } else {
+        std::cout << "Starting thermalization phase..." << std::endl;
+        std::vector<double> therm_plaq(CONFIG);
+
+        for (int j = 0; j < thermal_sweeps; j++) {
+            bool log_this_sweep = (j % 10 == 0);
+            
+            if (log_this_sweep) {
+                std::cout << "Thermalization Sweep: " << j << std::endl;
             }
             
+            #pragma omp parallel for
+            for (int i = 0; i < CONFIG; i++) {
+                auto [avg_plaq_local, avg_action_local] = heatbath_update(links_at_coupling[i], coupling_constants[i]);
+                therm_plaq[i] = avg_plaq_local;
+            }
+
+            for (int i = 0; i < CONFIG; i++) {
+                Thermfile << therm_plaq[i] << (i < CONFIG - 1 ? "," : "");
+            }
+            Thermfile << "\n";
+
+            if (log_this_sweep) {
+                for (int i = 0; i < CONFIG; i++) {
+                    std::cout << "  Coupling: " << coupling_constants[i] 
+                              << ", Avg Plaquette: " << therm_plaq[i] << std::endl;
+                }
+            }
+        }
+    }
 
 
-        // Now we will fix the configuration to be CONFIG[i] and use that to measure the string tension
-        // For lattice spacing a=1: 
-        //<W_C>=3(beta/18)^n_A where n_A is the area of the loop measured
-        // Similarly ln(<W_C>/3)=-n_tV(n_r)=-n_t (sigma) n_r where sigma is the string tension
-        // So we want to keep track of -ln(<W_C>/3)=n_A sigma and show sigma = -ln(beta/18) to first order in beta
+    // --- 5. Measurement Phase ---
+    std::cout << "Starting measurement phase..." << std::endl;
+    std::vector<double> sweep_plaq(CONFIG);
+    std::vector<double> sweep_action(CONFIG);
+    std::vector<std::vector<double>> sweep_poly_real(CONFIG, std::vector<double>(maxdistance));
+    std::vector<std::vector<double>> sweep_poly_imag(CONFIG, std::vector<double>(maxdistance));
+
+    for (int j = 0; j < measurment_sweeps; j++) {
+        if (j % 10 == 0) {
+            std::cout << "Measurement Sweep: " << j << std::endl;
+        }
+
+        #pragma omp parallel for
+        for (int i = 0; i < CONFIG; i++) {
+            auto [plaq, action] = heatbath_update(links_at_coupling[i], coupling_constants[i]);
+            sweep_plaq[i]   = plaq;
+            sweep_action[i] = action;
+
+            // 2. Precompute Polyakov grid 
+            std::vector<complex> P_grid = precompute_polyakov_grid(links_at_coupling[i]);
+
+            // 3. Compute Correlator
+            for (int r2 = 1; r2 <= maxdistance; r2++) { // Note: maxdistance should now represent r^2
+                complex C_r = correlator_over_fixed_distance_fast(P_grid, r2);
+                
+                // C_r will be 0.0 + 0.0i if there are no integer points corresponding to the r^2 value.
+                sweep_poly_real[i][r2 - 1] = C_r.real();
+                sweep_poly_imag[i][r2 - 1] = C_r.imag();
+            }    
+        } // <-- CORRECTLY CLOSED 'i' LOOP HERE
+
+        // --- FILE OUTPUT (Inside the 'j' loop) ---
+        for (int i = 0; i < CONFIG; i++) {
+            RawMCfile  << sweep_plaq[i]   << (i < CONFIG - 1 ? "," : "");
+            Actionfile << sweep_action[i] << (i < CONFIG - 1 ? "," : "");
+        }
+        RawMCfile  << "\n";
+        Actionfile << "\n";
+
+        for (int i = 0; i < CONFIG; i++) {
+            poly        << j << "," << i << ",";
+            polycomplex << j << "," << i << ",";
+
+            for (int r = 1; r <= maxdistance; r++) {
+                poly        << sweep_poly_real[i][r - 1] << (r < maxdistance ? "," : "");
+                polycomplex << sweep_poly_imag[i][r - 1] << (r < maxdistance ? "," : "");
+            }
+            poly        << "\n";
+            polycomplex << "\n";
+        }
+    } // <-- CORRECTLY CLOSED 'j' (MEASUREMENT SWEEP) LOOP HERE
 
 
-
-        // So for our loops let fix n_t and run through the possible n_r in one of the spatial directions. 
-        // Number of points is linear wrt to the size of the lattice
-        // for (int r = 1; r <  maxdistance+1; r++){
-        //     PL= correlator_over_fixed_distance(links_at_coupling[0],r);
-        //     if (r <  maxdistance){
-        //         poly << PL.real()<< ",";
-        //         polycomplex << PL.imag()<<",";
-        //     }
-        //     else {
-        //         poly << PL.real();
-        //         polycomplex << PL.imag();
-        //     }
-        // }
-
-
-      
-                        
-
-        RawMCfile << "\n";
-        poly<<"\n";
-        polycomplex<<"\n";
-        polyloop<<"\n";
-        polyloopcomplex<<"\n";
+    // --- 6. Save Final Lattice Configurations ---
+    if (save_checkpoint) {
+        std::cout << "Saving final lattice configurations to " << checkpoint_filename << "..." << std::endl;
+        if (save_all_lattice_configs(links_at_coupling, checkpoint_filename)) {
+            std::cout << "Final configurations saved successfully." << std::endl;
+        }
     }
 
     Thermfile.close();
     RawMCfile.close();
+    Actionfile.close();
     poly.close();
     polycomplex.close();
-    polyloop.close();        
-    polyloopcomplex.close();
     return 0;
 }
